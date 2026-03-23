@@ -22,7 +22,7 @@ jobs:
             - name: Build
               run: npm run dist -- --publish=always
               env:
-                  UJAI_KIOSK: ${{ secrets.UJAI_KIOSK }}
+                  GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
             - name: Upload artifact
               uses: actions/upload-artifact@v4
