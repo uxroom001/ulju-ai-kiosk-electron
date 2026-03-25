@@ -5,9 +5,69 @@ const {
     session,
     systemPreferences,
 } = require("electron");
+const fs = require("node:fs");
+const path = require("node:path");
+const { inspect } = require("node:util");
 const { autoUpdater } = require("electron-updater");
 
 const KIOSK_URL = "https://ulju-ai-kiosk.vercel.app/";
+const CAMERA_PERMISSIONS = new Set(["media", "camera"]);
+
+let logFilePath = null;
+
+function serializeLogArg(arg) {
+    if (typeof arg === "string") {
+        return arg;
+    }
+
+    return inspect(arg, {
+        depth: 6,
+        breakLength: Infinity,
+        compact: true,
+    });
+}
+
+function getLogFilePath() {
+    if (!logFilePath) {
+        const logDir = path.join(app.getPath("userData"), "logs");
+        fs.mkdirSync(logDir, { recursive: true });
+        logFilePath = path.join(logDir, "main.log");
+    }
+
+    return logFilePath;
+}
+
+function writeLog(level, ...args) {
+    const message = `${new Date().toISOString()} [${level}] ${args
+        .map(serializeLogArg)
+        .join(" ")}`;
+
+    if (level === "ERROR") {
+        console.error(...args);
+    } else if (level === "WARN") {
+        console.warn(...args);
+    } else {
+        console.log(...args);
+    }
+
+    try {
+        fs.appendFileSync(getLogFilePath(), `${message}\n`, "utf8");
+    } catch (error) {
+        console.error("[log-write-failed]", error);
+    }
+}
+
+function logInfo(...args) {
+    writeLog("INFO", ...args);
+}
+
+function logWarn(...args) {
+    writeLog("WARN", ...args);
+}
+
+function logError(...args) {
+    writeLog("ERROR", ...args);
+}
 
 function isTrustedOrigin(origin) {
     try {
@@ -18,18 +78,32 @@ function isTrustedOrigin(origin) {
     }
 }
 
+function resolveRequestOrigin(requestingOrigin, details = {}) {
+    return (
+        requestingOrigin ||
+        details.requestingOrigin ||
+        details.requestingUrl ||
+        details.embeddingOrigin ||
+        details.securityOrigin ||
+        ""
+    );
+}
+
 function registerMediaPermissionHandlers() {
     const defaultSession = session.defaultSession;
 
-    defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
-        if (permission === "media") {
-            console.log(
+    defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+        if (CAMERA_PERMISSIONS.has(permission)) {
+            const resolvedOrigin = resolveRequestOrigin(requestingOrigin, details);
+            const allowed = isTrustedOrigin(resolvedOrigin);
+            logInfo(
                 "[permission-check]",
                 permission,
-                requestingOrigin,
-                isTrustedOrigin(requestingOrigin),
+                resolvedOrigin,
+                allowed,
+                details,
             );
-            return isTrustedOrigin(requestingOrigin);
+            return allowed;
         }
 
         return true;
@@ -37,13 +111,18 @@ function registerMediaPermissionHandlers() {
 
     defaultSession.setPermissionRequestHandler(
         (webContents, permission, callback, details) => {
-            if (permission === "media") {
-                const allowed = isTrustedOrigin(details.requestingOrigin);
-                console.log(
+            if (CAMERA_PERMISSIONS.has(permission)) {
+                const resolvedOrigin = resolveRequestOrigin(
+                    details.requestingOrigin,
+                    details,
+                );
+                const allowed = isTrustedOrigin(resolvedOrigin);
+                logInfo(
                     "[permission-request]",
                     permission,
-                    details.requestingOrigin,
+                    resolvedOrigin,
                     allowed,
+                    details,
                 );
                 callback(allowed);
                 return;
@@ -54,15 +133,20 @@ function registerMediaPermissionHandlers() {
     );
 
     defaultSession.setDevicePermissionHandler((details) => {
+        const resolvedOrigin = resolveRequestOrigin(
+            details.requestingOrigin,
+            details,
+        );
         const allowed =
             details.deviceType === "videoCapture" &&
-            isTrustedOrigin(details.requestingOrigin);
+            isTrustedOrigin(resolvedOrigin);
 
-        console.log(
+        logInfo(
             "[device-permission]",
             details.deviceType,
-            details.requestingOrigin,
+            resolvedOrigin,
             allowed,
+            details,
         );
 
         return allowed;
@@ -75,12 +159,16 @@ async function ensureCameraAccess() {
     }
 
     const status = systemPreferences.getMediaAccessStatus("camera");
+    logInfo("[camera-access-status]", status);
+
     if (status === "granted") {
         return true;
     }
 
     if (status === "not-determined") {
-        return systemPreferences.askForMediaAccess("camera");
+        const granted = await systemPreferences.askForMediaAccess("camera");
+        logInfo("[camera-access-request-result]", granted);
+        return granted;
     }
 
     await dialog.showMessageBox({
@@ -110,12 +198,19 @@ function createWindow() {
         },
     });
 
-    win.webContents.on("console-message", (event, level, message, line, sourceId) => {
-        console.log(`[renderer:${level}] ${message} (${sourceId}:${line})`);
+    win.webContents.on("console-message", (event, details) => {
+        if (details && typeof details === "object") {
+            logInfo(
+                `[renderer:${details.level}] ${details.message} (${details.sourceId}:${details.lineNumber})`,
+            );
+            return;
+        }
+
+        logInfo("[renderer] console-message event received without details object");
     });
 
     win.webContents.on("did-fail-load", (event, errorCode, errorDescription, validatedURL) => {
-        console.error(
+        logError(
             "[did-fail-load]",
             errorCode,
             errorDescription,
@@ -124,9 +219,14 @@ function createWindow() {
     });
 
     win.webContents.on("render-process-gone", (event, details) => {
-        console.error("[render-process-gone]", details.reason, details.exitCode);
+        logError("[render-process-gone]", details.reason, details.exitCode);
     });
 
+    win.webContents.on("did-finish-load", () => {
+        logInfo("[did-finish-load]", win.webContents.getURL());
+    });
+
+    logInfo("[load-url]", KIOSK_URL);
     win.loadURL(KIOSK_URL);
 
     // 뒤로가기 차단
@@ -143,14 +243,26 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+    logInfo("[app-ready]");
+    logInfo("[log-file]", getLogFilePath());
+
     registerMediaPermissionHandlers();
 
     const hasCameraAccess = await ensureCameraAccess();
     if (!hasCameraAccess) {
+        logWarn("[camera-access-denied]");
         return;
     }
 
     createWindow();
 
     autoUpdater.checkForUpdatesAndNotify();
+});
+
+process.on("uncaughtException", (error) => {
+    logError("[uncaughtException]", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+    logError("[unhandledRejection]", reason);
 });
