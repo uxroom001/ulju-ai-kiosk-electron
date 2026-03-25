@@ -2,10 +2,22 @@
     "name": "ulju-ai-kiosk-electron",
     "productName": "울주 AI 키오스크",
     "version": "1.0.1",
-    "description": "",
+    "description": "Electron wrapper for the Ulju AI kiosk deployed web app.",
     "main": "main.js",
     "build": {
         "appId": "com.my.kiosk",
+        "mac": {
+            "target": "dmg",
+            "category": "public.app-category.utilities",
+            "icon": "build/icon.icns",
+            "artifactName": "UljuKiosk-${version}-mac.${ext}",
+            "hardenedRuntime": true,
+            "entitlements": "build/entitlements.mac.plist",
+            "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+            "extendInfo": {
+                "NSCameraUsageDescription": "QR 코드 인식과 얼굴 확인을 위해 카메라 접근이 필요합니다."
+            }
+        },
         "win": {
             "target": "nsis",
             "icon": "build/icon.ico"
