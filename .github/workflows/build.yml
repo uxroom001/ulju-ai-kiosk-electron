@@ -19,10 +19,10 @@ jobs:
             - name: Install dependencies
               run: npm install
 
-            - name: Build
-              run: npm run dist -- --publish=always
+            - name: Build and Publish
+              run: npm run dist
               env:
-                  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Upload artifact
               uses: actions/upload-artifact@v4

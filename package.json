@@ -12,7 +12,9 @@
         },
         "publish": [
             {
-                "provider": "github"
+                "provider": "github",
+                "owner": "uxroom001",
+                "repo": "ulju-ai-kiosk-electron"
             }
         ],
         "icon": "build/icon.ico",
